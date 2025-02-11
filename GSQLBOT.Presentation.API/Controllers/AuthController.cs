@@ -52,25 +52,44 @@ namespace GSQLBOT.Presentation.API.Controllers
         [HttpPost("verify-otp")]
         public async Task<IActionResult> VerifyOtpAsync([FromQuery] string email, [FromQuery] string otp)
         {
-            var result = await _authService.VerifyOtpAsync(email, otp);
+            var result = await _authService.VerifyOtpAsync(email, otp,false);
             if (!result.IsAuthenticated) return BadRequest(result.Message);
 
             return Ok(result);
         }
         [HttpPost("forgetpassword")]
-        public async Task<IActionResult> ForgetPassword(string email)
+        public async Task<IActionResult> ForgetPassword([FromQuery] string email)
         {
-            return Ok();
+            var success = await _authService.ForgetPasswordAsync(email);
+            if (!success) return BadRequest("Failed to send OTP. Please check your email.");
+
+            return Ok("OTP sent to your email.");
         }
-        [HttpPost("newpassword")]
-        public async Task<IActionResult> NewPassword(string email)
+        [HttpPost("verify-password-otp")]
+        public async Task<IActionResult> VerifyPasswordOtpAsync([FromQuery] string email, [FromQuery] string otp)
         {
-            return Ok();
+            var result = await _authService.VerifyOtpAsync(email, otp,true);
+            if (!result.IsAuthenticated) return BadRequest(result.Message);
+
+            return Ok(result);
+        }
+        [HttpPost("new-password")]
+        public async Task<IActionResult> NewPassword([FromBody] ResetPasswordDTO resetPasswordDTO)
+        {
+            var result = await _authService.NewPasswordAsync(resetPasswordDTO.Email, resetPasswordDTO.NewPassword);
+
+            if (!result.IsAuthenticated)
+                return BadRequest(result.Message);
+
+            return Ok(result);
         }
         [HttpPost("change-password")]
-        public async Task<IActionResult> ChangePassword(ChangePassDTOs changePassDTOs)
+        public async Task<IActionResult> ChangePassword([FromBody] ChangePassDTOs changePassDTOs)
         {
-            return Ok();
+            var success = await _authService.ChangePasswordAsync(changePassDTOs);
+            if (!success) return BadRequest("Password change failed.");
+
+            return Ok("Password changed successfully.");
         }
     }
 }

@@ -145,7 +145,7 @@ namespace GSQLBOT.Services.Service
             return true;
         }
         // Verify OTP
-        public async Task<AuthDTOs> VerifyOtpAsync(string email, string otp)
+        public async Task<AuthDTOs> VerifyOtpAsync(string email, string otp, bool isForResetPassword)
         {
             var user = await _userManager.FindByEmailAsync(email);
             if (user == null)
@@ -163,12 +163,23 @@ namespace GSQLBOT.Services.Service
                 return new AuthDTOs { IsAuthenticated = false, Message = "OTP expired." };
             }
 
-            // Mark the email as confirmed
+            // If OTP is for password reset, just verify OTP and return success
+            if (isForResetPassword)
+            {
+                user.OTP = null;
+                await _userManager.UpdateAsync(user);
+                return new AuthDTOs 
+                { 
+                    IsAuthenticated = false, 
+                    Message = "OTP verified successfully. Proceed to reset password." 
+                };
+            }
+
+            // If OTP is for email confirmation, confirm email & generate token
             user.EmailConfirmed = true;
             user.OTP = null;
             await _userManager.UpdateAsync(user);
 
-            // Generate JWT token
             var jwtSecurityToken = await CreateJwtToken(user);
             return new AuthDTOs
             {
@@ -176,8 +187,76 @@ namespace GSQLBOT.Services.Service
                 IsAuthenticated = true,
                 Roles = new List<string> { "User" },
                 Token = new JwtSecurityTokenHandler().WriteToken(jwtSecurityToken),
-                UserName = user.UserName
+                UserName = user.UserName,
+                Message = "Email verified successfully."
             };
+        }
+        // Forget Password - Send OTP
+        public async Task<bool> ForgetPasswordAsync(string email)
+        {
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null) return false;
+
+
+            var templatePath = Path.Combine(_env.WebRootPath, "EmailTemplete", "OTP.cshtml");
+            if (!File.Exists(templatePath)) return false;
+
+            var otp = OtpGenerator.GenerateOtp();
+            user.OTP = otp;
+            user.Expiredat = DateTime.UtcNow.AddMinutes(2);
+            await _userManager.UpdateAsync(user);
+
+            string emailBody;
+            using (var reader = new StreamReader(templatePath))
+            {
+                emailBody = await reader.ReadToEndAsync();
+            }
+
+            emailBody = emailBody.Replace("{{otp}}", otp);
+            await _emailSender.SendEmailAsync(email, "Reset Password OTP", emailBody);
+
+            return true;
+        }
+        // New Password - Uses separate OTP verification
+        public async Task<AuthDTOs> NewPasswordAsync(string email, string newPassword)
+        {
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+                return new AuthDTOs { IsAuthenticated = false, Message = "User not found." };
+
+            var resetToken = await _userManager.GeneratePasswordResetTokenAsync(user);
+            var resetResult = await _userManager.ResetPasswordAsync(user, resetToken, newPassword);
+
+            if (!resetResult.Succeeded)
+            {
+                var errors = string.Join(", ", resetResult.Errors.Select(e => e.Description));
+                return new AuthDTOs { IsAuthenticated = false, Message = $"Password reset failed: {errors}" };
+            }
+
+            // Generate JWT token after password reset
+            var jwtSecurityToken = await CreateJwtToken(user);
+            return new AuthDTOs
+            {
+                Email = user.Email,
+                IsAuthenticated = true,
+                Roles = new List<string> { "User" },
+                Token = new JwtSecurityTokenHandler().WriteToken(jwtSecurityToken),
+                UserName = user.UserName,
+                Message = "Password reset successfully. You are now logged in."
+            };
+        }
+
+        // Change Password
+        public async Task<bool> ChangePasswordAsync(ChangePassDTOs changePassDTOs)
+        {
+            var user = await _userManager.FindByEmailAsync(changePassDTOs.Email);
+            if (user == null) return false;
+
+            var changePasswordResult = await _userManager.ChangePasswordAsync(user, changePassDTOs.OldPassword, changePassDTOs.NewPassword);
+            if (!changePasswordResult.Succeeded)
+                return false;
+
+            return true;
         }
         private async Task<JwtSecurityToken> CreateJwtToken(ApplicationUser user)
         {
