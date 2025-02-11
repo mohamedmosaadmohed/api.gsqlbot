@@ -13,6 +13,7 @@ namespace GSQLBOT.Core.Model
         public string LastName { get; set; }
         [MinLength(6),MaxLength(6)]
         public string? OTP { get; set; }
+        public DateTime Expiredat { get; set; }
         public int SaveChat { get; set; } = 1;
         public DateTime CreateOn { get; set; } = DateTime.UtcNow;
         public List<TbRefreshToken> RefreshTokens { get; set; }

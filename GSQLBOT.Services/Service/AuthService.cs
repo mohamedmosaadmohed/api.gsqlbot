@@ -3,6 +3,7 @@ using GSQLBOT.Core.DTOs;
 using GSQLBOT.Core.Helpers;
 using GSQLBOT.Core.Model;
 using GSQLBOT.Services.Interface;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.UI.Services;
 using Microsoft.Extensions.Options;
@@ -20,21 +21,26 @@ namespace GSQLBOT.Services.Service
         private readonly RoleManager<IdentityRole> _roleManager;
         private readonly JWT _jwt;
         private readonly IEmailSender _emailSender;
-        public AuthService(UserManager<ApplicationUser> userManager, RoleManager<IdentityRole> roleManager, IOptions<JWT> jwt, IEmailSender emailSender)
+        private readonly IWebHostEnvironment _env;
+        public AuthService(UserManager<ApplicationUser> userManager, 
+            RoleManager<IdentityRole> roleManager, IOptions<JWT> jwt, IEmailSender emailSender,IWebHostEnvironment env)
         {
             _userManager = userManager;
             _roleManager = roleManager;
             _jwt = jwt.Value;
             _emailSender = emailSender;
+            _env = env;
         }
         // Register
         public async Task<AuthDTOs> RegisterAsync(RegisterDTOs registerDT)
         {
+            // Check if the email is already registered
             if (await _userManager.FindByEmailAsync(registerDT.Email) is not null)
-                return new AuthDTOs { Message = "Email is already registered!" };
+                return new AuthDTOs { Message = "Email is already registered!", IsAuthenticated = false };
 
+            // Check if the username is already taken
             if (await _userManager.FindByNameAsync(registerDT.Username) is not null)
-                return new AuthDTOs { Message = "Username is already registered!" };
+                return new AuthDTOs { Message = "Username is already registered!", IsAuthenticated = false };
 
             var user = new ApplicationUser
             {
@@ -43,26 +49,28 @@ namespace GSQLBOT.Services.Service
                 FirstName = registerDT.FirstName,
                 LastName = registerDT.LastName
             };
+
+            // Create user
             var result = await _userManager.CreateAsync(user, registerDT.Password);
             if (!result.Succeeded)
             {
-                var errors = string.Empty;
-
-                foreach (var error in result.Errors)
-                    errors += $"{error.Description},";
-
-                return new AuthDTOs { Message = errors };
+                var errors = string.Join(", ", result.Errors.Select(e => e.Description));
+                return new AuthDTOs { Message = errors, IsAuthenticated = false };
             }
+
+            // Assign default role
             await _userManager.AddToRoleAsync(user, "User");
-            var jwtSecurityToken = await CreateJwtToken(user);
+
+            // Send OTP for email verification
+            var otpSent = await SendOtpAsync(user.Email);
+            if (!otpSent)
+                return new AuthDTOs { Message = "Failed to send OTP. Please try again.", IsAuthenticated = false };
+
             return new AuthDTOs
             {
                 Email = user.Email,
-                //ExpiresOn = jwtSecurityToken.ValidTo,
-                IsAuthenticated = true,
-                Roles = new List<string> { "User" },
-                Token = new JwtSecurityTokenHandler().WriteToken(jwtSecurityToken),
-                UserName = user.UserName
+                IsAuthenticated = false,
+                Message = "OTP sent to your email. Please verify your email to continue."
             };
         }
         // Login
@@ -76,7 +84,16 @@ namespace GSQLBOT.Services.Service
                 authDTOs.Message = "Email or Password is incorrect!";
                 return authDTOs;
             }
-
+            if(user.EmailConfirmed != true)
+            {
+                await SendOtpAsync(loginDTOs.Email);
+                return new AuthDTOs
+                {
+                    Email = loginDTOs.Email,
+                    IsAuthenticated = false,
+                    Message = "OTP sent to your email. Please verify your email to continue."
+                };
+            }
             var jwtSecurityToken = await CreateJwtToken(user);
             var rolesList = await _userManager.GetRolesAsync(user);
 
@@ -103,10 +120,19 @@ namespace GSQLBOT.Services.Service
             }
             return authDTOs;
         }
-        public async Task<string> SendOtp(string email)
+        // Send OTP
+        public async Task<bool> SendOtpAsync(string email)
         {
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null) return false;
+
+            var templatePath = Path.Combine(_env.WebRootPath, "EmailTemplete", "OTP.cshtml");
+            if (!File.Exists(templatePath)) return false;
+
             var otp = OtpGenerator.GenerateOtp();
-            var templatePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot/EmailTemplete/OTP.cshtml");
+            user.OTP = otp;
+            user.Expiredat = DateTime.UtcNow.AddMinutes(2);
+            await _userManager.UpdateAsync(user);
 
             string emailBody;
             using (var reader = new StreamReader(templatePath))
@@ -116,7 +142,42 @@ namespace GSQLBOT.Services.Service
             emailBody = emailBody.Replace("{{otp}}", otp);
             await _emailSender.SendEmailAsync(email, "Your OTP Code", emailBody);
 
-            return otp;
+            return true;
+        }
+        // Verify OTP
+        public async Task<AuthDTOs> VerifyOtpAsync(string email, string otp)
+        {
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                return new AuthDTOs { IsAuthenticated = false, Message = "User not found." };
+            }
+
+            if (string.IsNullOrEmpty(user.OTP) || user.OTP != otp)
+            {
+                return new AuthDTOs { IsAuthenticated = false, Message = "Invalid OTP." };
+            }
+
+            if (user.Expiredat < DateTime.UtcNow)
+            {
+                return new AuthDTOs { IsAuthenticated = false, Message = "OTP expired." };
+            }
+
+            // Mark the email as confirmed
+            user.EmailConfirmed = true;
+            user.OTP = null;
+            await _userManager.UpdateAsync(user);
+
+            // Generate JWT token
+            var jwtSecurityToken = await CreateJwtToken(user);
+            return new AuthDTOs
+            {
+                Email = user.Email,
+                IsAuthenticated = true,
+                Roles = new List<string> { "User" },
+                Token = new JwtSecurityTokenHandler().WriteToken(jwtSecurityToken),
+                UserName = user.UserName
+            };
         }
         private async Task<JwtSecurityToken> CreateJwtToken(ApplicationUser user)
         {

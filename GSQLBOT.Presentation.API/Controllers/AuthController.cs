@@ -18,14 +18,15 @@ namespace GSQLBOT.Presentation.API.Controllers
         public async Task<IActionResult> RegisterAsync([FromBody] RegisterDTOs registerDTOs)
         {
             if (!ModelState.IsValid)
-                return BadRequest(ModelState);
+                return BadRequest(new { Message = "Invalid input data",
+                    Errors = ModelState.Values.SelectMany(v => v.Errors.Select(e => e.ErrorMessage)) });
 
             var result = await _authService.RegisterAsync(registerDTOs);
 
             if (!result.IsAuthenticated)
-                return BadRequest(result.Message);
+                return BadRequest(new { Message = result.Message });
 
-            return Ok(result);
+            return Ok(new { Message = result.Message, Email = result.Email });
         }
         [HttpPost("login")]
         public async Task<IActionResult> LoginAsync([FromBody] LoginDTOs loginDTOs)
@@ -40,21 +41,24 @@ namespace GSQLBOT.Presentation.API.Controllers
 
             return Ok(result);
         }
-        [HttpPost("forgetpassword")]
-        public async Task<IActionResult> ForgetPassword(string email)
-        {
-            return Ok();
-        }
         [HttpPost("send-otp")]
-        public async Task<IActionResult> SendOtp(string email)
+        public async Task<IActionResult> SendOtpAsync([FromQuery] string email)
         {
-            if (await _authService.SendOtp(email) is not null)
-                return Ok("Otp Send Successfully");
-            else
-                return BadRequest("Error");
+            var success = await _authService.SendOtpAsync(email);
+            if (!success) return BadRequest("Failed to send OTP. Please try again.");
+
+            return Ok("OTP sent successfully.");
         }
         [HttpPost("verify-otp")]
-        public async Task<IActionResult> VerifyOtp(string email,string otp)
+        public async Task<IActionResult> VerifyOtpAsync([FromQuery] string email, [FromQuery] string otp)
+        {
+            var result = await _authService.VerifyOtpAsync(email, otp);
+            if (!result.IsAuthenticated) return BadRequest(result.Message);
+
+            return Ok(result);
+        }
+        [HttpPost("forgetpassword")]
+        public async Task<IActionResult> ForgetPassword(string email)
         {
             return Ok();
         }
