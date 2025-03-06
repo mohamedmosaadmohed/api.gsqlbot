@@ -9,10 +9,12 @@ namespace GSQLBOT.Infrastructure.RepositoriesImplementation
     {
         private readonly ApplicationDbContext _;
         public IChatRepository Chat { get; private set; }
+        public IChatMessageRepository ChatMessage { get; private set; }
         public UnitOfWork(ApplicationDbContext context)
         {
             _ = context;
             Chat = new ChatRepository(context);
+            ChatMessage = new ChatMessageRepository(context);
         }
         public Task CompleteAsync()
         {
